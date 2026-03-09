@@ -7,6 +7,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .expectations import load_expectations_files
 from .types import ComparisonResult, SpecialDirectoryReport
 
 MARKER_FILES = ("redcap_connect.php", "database.php", "cron.php")
@@ -39,6 +40,7 @@ def compare_reference_zip_to_target(
     reference_zip: Path,
     target_root: Path,
     ignored_subdirectories: list[str] | None = None,
+    expectations_files: list[Path] | None = None,
 ) -> ComparisonResult:
     reference_zip = reference_zip.resolve()
     target_root = detect_redcap_root(target_root.resolve())
@@ -52,39 +54,70 @@ def compare_reference_zip_to_target(
         ignored_top_level_dirs=ignored_version_dirs,
         ignored_subdirectories=ignored_subdirectories,
     )
+    expectations: dict[str, str] = {}
+    if expectations_files:
+        expectations, expectation_warnings, _ = load_expectations_files(
+            expectations_files
+        )
+        warnings.extend(expectation_warnings)
 
     all_reference_files = reference.file_paths
     all_target_files = target.file_paths
 
-    different_files = sorted(
+    different_files = {
         path
         for path in (all_reference_files & all_target_files)
         if reference.file_hashes[path] != target.file_hashes[path]
-    )
+    }
     missing_files = sorted(all_reference_files - all_target_files)
-    raw_extra_files = sorted(all_target_files - all_reference_files)
+    raw_extra_files = set(all_target_files - all_reference_files)
+    matched_expectations: list[str] = []
 
-    special_dirs = summarize_special_extras(reference, target)
+    for rel_path, expected_hash in expectations.items():
+        if rel_path not in all_target_files:
+            warnings.append(
+                f"Unused expectation for missing target file: {rel_path}"
+            )
+            continue
+
+        actual_hash = target.file_hashes[rel_path]
+        if actual_hash != expected_hash:
+            warnings.append(
+                f"Expectation hash did not match target file: {rel_path}"
+            )
+            continue
+
+        matched_expectations.append(rel_path)
+        different_files.discard(rel_path)
+        raw_extra_files.discard(rel_path)
+
+    special_dirs = summarize_special_extras(
+        reference,
+        target,
+        suppressed_files=set(matched_expectations),
+    )
     special_extra_files = {
         path for path in raw_extra_files if top_level_component(path) in SPECIAL_DIRS
     }
-    extra_files = sorted(set(raw_extra_files) - special_extra_files)
+    extra_files = sorted(raw_extra_files - special_extra_files)
 
     return ComparisonResult(
         reference_zip=reference_zip,
         reference_zip_sha256=reference_zip_sha256,
         reference_root="ZIP:redcap/",
         target_root=target_root,
+        expectations_files=[path.resolve() for path in (expectations_files or [])],
         parsed_version=parsed_version,
         matching_count=len(all_reference_files & all_target_files) - len(different_files),
-        different_files=different_files,
+        matched_expectations=sorted(matched_expectations),
+        different_files=sorted(different_files),
         missing_files=missing_files,
         extra_files=extra_files,
         special_dirs=special_dirs,
         extra_versioned_dirs=sorted(ignored_version_dirs),
         skipped_symlinks=sorted(set(reference.symlinks + target.symlinks)),
         unreadable_files=sorted(set(reference.unreadable_files + target.unreadable_files)),
-        warnings=warnings,
+        warnings=sorted(set(warnings)),
         ignored_subdirectories=ignored_subdirectories,
     )
 
@@ -328,13 +361,19 @@ def is_ignored_relpath(path: str, ignored_subdirectories: list[str]) -> bool:
 def summarize_special_extras(
     reference: TreeSnapshot,
     target: TreeSnapshot,
+    suppressed_files: set[str] | None = None,
 ) -> dict[str, SpecialDirectoryReport]:
     reports: dict[str, SpecialDirectoryReport] = {
         name: SpecialDirectoryReport(name=name)
         for name in SPECIAL_DIRS
     }
 
-    extra_entries = sorted(target.all_paths - reference.all_paths)
+    extra_entries = set(target.all_paths - reference.all_paths)
+    if suppressed_files:
+        extra_entries -= suppressed_files
+        extra_entries = prune_empty_extra_dirs(extra_entries, target.dir_paths)
+
+    extra_entries = sorted(extra_entries)
 
     for entry in extra_entries:
         top_level = top_level_component(entry)
@@ -355,6 +394,24 @@ def summarize_special_extras(
         report.extra_hook_entries.sort()
 
     return reports
+
+
+def prune_empty_extra_dirs(extra_entries: set[str], target_dirs: set[str]) -> set[str]:
+    pruned = set(extra_entries)
+
+    changed = True
+    while changed:
+        changed = False
+        for entry in sorted(pruned, key=lambda value: value.count("/"), reverse=True):
+            if entry not in target_dirs:
+                continue
+            prefix = f"{entry}/"
+            if any(candidate.startswith(prefix) for candidate in pruned):
+                continue
+            pruned.remove(entry)
+            changed = True
+
+    return pruned
 
 
 def top_level_component(path: str) -> str:

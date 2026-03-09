@@ -24,6 +24,10 @@ def render_report(result: ComparisonResult) -> str:
     if result.warnings:
         add(f"Warnings: {len(result.warnings)}")
     add("")
+    add("Expectations Files")
+    add("------------------")
+    add_paths(add, [str(path) for path in result.expectations_files])
+    add("")
     add("Ignored Subdirectories")
     add("----------------------")
     add_paths(add, result.ignored_subdirectories)
@@ -31,6 +35,7 @@ def render_report(result: ComparisonResult) -> str:
     add("Summary")
     add("-------")
     add(f"Matching files: {result.matching_count}")
+    add(f"Matched expectations: {len(result.matched_expectations)}")
     add(f"Different files: {len(result.different_files)}")
     add(f"Missing files: {len(result.missing_files)}")
     add(f"Extra files: {len(result.extra_files)}")
@@ -62,6 +67,11 @@ def render_report(result: ComparisonResult) -> str:
     add("Different Files")
     add("---------------")
     add_paths(add, result.different_files)
+    add("")
+
+    add("Matched Expectations")
+    add("--------------------")
+    add_paths(add, result.matched_expectations)
     add("")
 
     add("Missing Files")

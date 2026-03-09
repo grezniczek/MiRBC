@@ -16,6 +16,7 @@ def main() -> int:
             reference_zip=inputs.reference_zip,
             target_root=inputs.target_root,
             ignored_subdirectories=inputs.ignored_subdirectories,
+            expectations_files=inputs.expectations_files,
         )
     except (EOFError, KeyboardInterrupt):
         return print_error("Input cancelled.")

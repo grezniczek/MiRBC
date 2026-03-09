@@ -2,7 +2,7 @@
 
 MiRBC is the Minimal REDCap Baseline Comparator. It compares a deployed
 REDCap installation against a matching reference REDCap ZIP by relative path
-and SHA-256 hash.
+and SHA-256 hash, with optional expected mismatches for intentional changes.
 
 Created jointly by Dr. Günther Rezniczek (design and prompting) and
 Codex / GPT-5.4 (implementation).
@@ -69,6 +69,7 @@ Run with both required inputs in either order:
 python3 -m mirbc /path/to/redcap15.7.4.zip /path/to/redcap
 python3 -m mirbc /path/to/redcap /path/to/redcap15.7.4.zip
 python3 -m mirbc -i modules/custom -i temp/cache /path/to/redcap15.7.4.zip /path/to/redcap
+python3 -m mirbc -e /path/to/base-expectations.txt -e /path/to/local-expectations.txt /path/to/redcap15.7.4.zip /path/to/redcap
 ```
 
 What the arguments mean:
@@ -93,6 +94,21 @@ python3 -m mirbc --ignore temp/cache --ignore hooks/archive /path/to/redcap15.7.
 
 In interactive mode, MiRBC will repeatedly prompt for ignored subdirectories.
 Press Enter on an empty prompt to finish the ignore list.
+
+To suppress known intentional mismatches, use `-e` or `--expectations` with one
+or more text files. Each non-empty, non-comment line must use:
+
+```text
+relative/path/to/file.php = 0123abcd...
+```
+
+- paths are relative to the detected REDCap root
+- hashes must be SHA-256 hex digests
+- matching expectations suppress only exact target-hash matches
+- repeated `-e` options are merged in CLI order
+- duplicate path entries with the same hash are ignored after the first one
+- duplicate path entries with different hashes abort the run
+- malformed or unused expectation entries are reported as warnings
 
 ### Install as a Script Entrypoint
 
@@ -146,9 +162,10 @@ The report prints:
 - reference REDCap root as `ZIP:redcap/`
 - detected target REDCap root
 - parsed REDCap version when available
+- expectations files when provided
 - ignored subdirectories requested by the user
-- summary counts for matching, different, missing, and extra files
-- detailed path lists for different, missing, and extra files
+- summary counts for matching, matched expectations, different, missing, and extra files
+- detailed path lists for matched expectations, different, missing, and extra files
 - warnings for ignored unexpected ZIP root-level entries
 
 ## Special Directory Handling

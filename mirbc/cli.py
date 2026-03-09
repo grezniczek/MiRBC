@@ -23,6 +23,7 @@ Usage:
   python -m mirbc
   python -m mirbc /path/to/redcap15.7.4.zip /path/to/redcap
   python -m mirbc -i modules/custom -i temp/cache /path/to/redcap15.7.4.zip /path/to/redcap
+  python -m mirbc -e /path/to/base.txt -e /path/to/local.txt /path/to/redcap15.7.4.zip /path/to/redcap
   python -m mirbc /path/to/redcap /path/to/redcap15.7.4.zip
   mirbc /path/to/redcap15.7.4.zip /path/to/redcap
 
@@ -31,6 +32,10 @@ This minimal version:
   - streams the reference ZIP without extracting it
   - performs no downloads, installs, or remote access
   - prints a text report to stdout
+
+Optional inputs:
+  -i, --ignore         Ignore a subdirectory relative to the detected target root.
+  -e, --expectations   Read expected file hashes from a text file; may be repeated.
 """
 
 
@@ -43,22 +48,29 @@ def parse_inputs(argv: list[str]) -> InputPaths | None:
         print(HELP_TEXT)
         return None
 
-    ignored_subdirectories, positional = parse_cli_args(argv)
+    ignored_subdirectories, expectations_files, positional = parse_cli_args(argv)
     if len(positional) != 2:
         raise ValueError(
-            "Expected exactly two positional arguments plus optional -i/--ignore entries."
+            "Expected exactly two positional arguments plus optional -i/--ignore and -e/--expectations entries."
         )
 
     return normalize_inputs(
         positional[0],
         positional[1],
         ignored_subdirectories=ignored_subdirectories,
+        expectations_files=expectations_files,
     )
 
 
 def prompt_for_inputs() -> InputPaths:
     reference = input("Reference ZIP path: ").strip()
     target = input("Target REDCap root path: ").strip()
+    expectations_files: list[str] = []
+    while True:
+        value = input("Expectations file path (empty to finish): ").strip()
+        if not value:
+            break
+        expectations_files.append(value)
     ignored_subdirectories: list[str] = []
     while True:
         value = input(
@@ -71,12 +83,14 @@ def prompt_for_inputs() -> InputPaths:
         reference,
         target,
         ignored_subdirectories=ignored_subdirectories,
+        expectations_files=expectations_files,
         interactive=True,
     )
 
 
-def parse_cli_args(argv: list[str]) -> tuple[list[str], list[str]]:
+def parse_cli_args(argv: list[str]) -> tuple[list[str], list[str], list[str]]:
     ignored_subdirectories: list[str] = []
+    expectations_files: list[str] = []
     positional: list[str] = []
     idx = 0
     while idx < len(argv):
@@ -89,10 +103,19 @@ def parse_cli_args(argv: list[str]) -> tuple[list[str], list[str]]:
             if idx >= len(argv):
                 raise ValueError("Missing value after -i/--ignore.")
             ignored_subdirectories.append(normalize_ignore_entry(argv[idx]))
+        elif token in {"-e", "--expectations"}:
+            idx += 1
+            if idx >= len(argv):
+                raise ValueError("Missing value after -e/--expectations.")
+            expectations_files.append(argv[idx])
         else:
             positional.append(token)
         idx += 1
-    return dedupe_preserve_order(ignored_subdirectories), positional
+    return (
+        dedupe_preserve_order(ignored_subdirectories),
+        dedupe_preserve_order(expectations_files),
+        positional,
+    )
 
 
 def normalize_inputs(
@@ -100,6 +123,7 @@ def normalize_inputs(
     second: str,
     *,
     ignored_subdirectories: list[str] | None = None,
+    expectations_files: list[str] | None = None,
     interactive: bool = False,
 ) -> InputPaths:
     first_path = Path(first).expanduser()
@@ -118,11 +142,27 @@ def normalize_inputs(
         raise ValueError(f"Reference ZIP not found or not a file: {reference_zip}")
     if not target_root.is_dir():
         raise ValueError(f"Target path not found or not a directory: {target_root}")
+    resolved_expectations: list[Path] = []
+    for expectations_file in dedupe_preserve_order(expectations_files or []):
+        resolved_expectation = Path(expectations_file).expanduser()
+        if not resolved_expectation.is_file():
+            raise ValueError(
+                f"Expectations file not found or not a file: {resolved_expectation}"
+            )
+        try:
+            with resolved_expectation.open("r", encoding="utf-8"):
+                pass
+        except OSError as exc:
+            raise ValueError(
+                f"Could not read expectations file {resolved_expectation}: {exc}"
+            ) from exc
+        resolved_expectations.append(resolved_expectation.resolve())
 
     return InputPaths(
         reference_zip=reference_zip.resolve(),
         target_root=target_root.resolve(),
         ignored_subdirectories=dedupe_preserve_order(ignored_subdirectories or []),
+        expectations_files=resolved_expectations,
         interactive=interactive,
     )
 
