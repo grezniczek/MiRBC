@@ -11,7 +11,9 @@ from .expectations import load_expectations_files
 from .types import ComparisonResult, SpecialDirectoryReport
 
 MARKER_FILES = ("redcap_connect.php", "database.php", "cron.php")
-SPECIAL_DIRS = ("temp", "modules", "edocs", "hooks")
+ALWAYS_SPECIAL_DIRS = ("temp", "edocs")
+OPTIONAL_SPECIAL_DIRS = ("modules", "hooks")
+SPECIAL_DIRS = ALWAYS_SPECIAL_DIRS + OPTIONAL_SPECIAL_DIRS
 EXPECTED_ZIP_ROOT_FILES = {
     "Installation Instructions.txt",
     "REDCap License.txt",
@@ -41,6 +43,8 @@ def compare_reference_zip_to_target(
     target_root: Path,
     ignored_subdirectories: list[str] | None = None,
     expectations_files: list[Path] | None = None,
+    skip_modules: bool = False,
+    skip_hooks: bool = False,
 ) -> ComparisonResult:
     reference_zip = reference_zip.resolve()
     target_root = detect_redcap_root(target_root.resolve())
@@ -53,6 +57,10 @@ def compare_reference_zip_to_target(
         target_root,
         ignored_top_level_dirs=ignored_version_dirs,
         ignored_subdirectories=ignored_subdirectories,
+    )
+    special_extra_dir_names = active_special_dirs(
+        skip_modules=skip_modules,
+        skip_hooks=skip_hooks,
     )
     expectations: dict[str, str] = {}
     if expectations_files:
@@ -94,10 +102,11 @@ def compare_reference_zip_to_target(
     special_dirs = summarize_special_extras(
         reference,
         target,
+        special_dir_names=special_extra_dir_names,
         suppressed_files=set(matched_expectations),
     )
     special_extra_files = {
-        path for path in raw_extra_files if top_level_component(path) in SPECIAL_DIRS
+        path for path in raw_extra_files if top_level_component(path) in special_extra_dir_names
     }
     extra_files = sorted(raw_extra_files - special_extra_files)
 
@@ -107,7 +116,10 @@ def compare_reference_zip_to_target(
         reference_root="ZIP:redcap/",
         target_root=target_root,
         expectations_files=[path.resolve() for path in (expectations_files or [])],
+        skip_modules=skip_modules,
+        skip_hooks=skip_hooks,
         parsed_version=parsed_version,
+        total_expectations=len(expectations),
         matching_count=len(all_reference_files & all_target_files) - len(different_files),
         matched_expectations=sorted(matched_expectations),
         different_files=sorted(different_files),
@@ -361,11 +373,12 @@ def is_ignored_relpath(path: str, ignored_subdirectories: list[str]) -> bool:
 def summarize_special_extras(
     reference: TreeSnapshot,
     target: TreeSnapshot,
+    special_dir_names: tuple[str, ...],
     suppressed_files: set[str] | None = None,
 ) -> dict[str, SpecialDirectoryReport]:
     reports: dict[str, SpecialDirectoryReport] = {
         name: SpecialDirectoryReport(name=name)
-        for name in SPECIAL_DIRS
+        for name in special_dir_names
     }
 
     extra_entries = set(target.all_paths - reference.all_paths)
@@ -416,6 +429,15 @@ def prune_empty_extra_dirs(extra_entries: set[str], target_dirs: set[str]) -> se
 
 def top_level_component(path: str) -> str:
     return path.split("/", 1)[0]
+
+
+def active_special_dirs(*, skip_modules: bool, skip_hooks: bool) -> tuple[str, ...]:
+    active = list(ALWAYS_SPECIAL_DIRS)
+    if skip_modules:
+        active.append("modules")
+    if skip_hooks:
+        active.append("hooks")
+    return tuple(active)
 
 
 def first_child_under(path: str, root_name: str) -> str:

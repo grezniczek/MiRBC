@@ -5,12 +5,21 @@ from pathlib import Path
 
 
 @dataclass(slots=True)
-class InputPaths:
+class CompareInputs:
     reference_zip: Path
     target_root: Path
     ignored_subdirectories: list[str] = field(default_factory=list)
     expectations_files: list[Path] = field(default_factory=list)
+    skip_modules: bool = False
+    skip_hooks: bool = False
     interactive: bool = False
+
+
+@dataclass(slots=True)
+class CreateExpectationsInputs:
+    root: Path
+    selected_paths: list[Path] = field(default_factory=list)
+    recursive: bool = False
 
 
 @dataclass(slots=True)
@@ -28,7 +37,10 @@ class ComparisonResult:
     reference_root: str
     target_root: Path
     expectations_files: list[Path] = field(default_factory=list)
+    skip_modules: bool = False
+    skip_hooks: bool = False
     parsed_version: str = ""
+    total_expectations: int = 0
     matching_count: int = 0
     matched_expectations: list[str] = field(default_factory=list)
     different_files: list[str] = field(default_factory=list)

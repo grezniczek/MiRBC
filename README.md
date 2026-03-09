@@ -70,6 +70,7 @@ python3 -m mirbc /path/to/redcap15.7.4.zip /path/to/redcap
 python3 -m mirbc /path/to/redcap /path/to/redcap15.7.4.zip
 python3 -m mirbc -i modules/custom -i temp/cache /path/to/redcap15.7.4.zip /path/to/redcap
 python3 -m mirbc -e /path/to/base-expectations.txt -e /path/to/local-expectations.txt /path/to/redcap15.7.4.zip /path/to/redcap
+python3 -m mirbc --skip-modules --skip-hooks /path/to/redcap15.7.4.zip /path/to/redcap
 ```
 
 What the arguments mean:
@@ -90,6 +91,8 @@ Examples:
 ```bash
 python3 -m mirbc -i modules/custom /path/to/redcap15.7.4.zip /path/to/redcap
 python3 -m mirbc --ignore temp/cache --ignore hooks/archive /path/to/redcap15.7.4.zip /path/to/redcap
+python3 -m mirbc --skip-modules /path/to/redcap15.7.4.zip /path/to/redcap
+python3 -m mirbc --skip-hooks /path/to/redcap15.7.4.zip /path/to/redcap
 ```
 
 In interactive mode, MiRBC will repeatedly prompt for ignored subdirectories.
@@ -109,6 +112,28 @@ relative/path/to/file.php = 0123abcd...
 - duplicate path entries with the same hash are ignored after the first one
 - duplicate path entries with different hashes abort the run
 - malformed or unused expectation entries are reported as warnings
+
+### Create Expectations
+
+To generate expectation entries from selected files under a deployed REDCap
+root, use the `create-expectations` subcommand.
+
+Examples:
+
+```bash
+python3 -m mirbc create-expectations --base /path/to/redcap database.php
+python3 -m mirbc create-expectations -b /path/to/redcap -r modules/custom
+python3 -m mirbc create-expectations --base /path/to/redcap database.php modules/custom -r > expectations.txt
+```
+
+Rules:
+
+- `-b` or `--base` is required and defines the relative path base
+- selected paths must be inside `-b` / `--base`
+- files are accepted directly
+- directories require `-r` or `--recursive`
+- symlinks are skipped
+- output is written to `stdout` as plain `path = sha256` lines
 
 ### Install as a Script Entrypoint
 
@@ -144,13 +169,19 @@ mirbc --help
 
 1. Obtain the official REDCap ZIP for the exact deployed version.
 2. Identify the deployed REDCap root on disk or on a read-only mount.
-3. Run MiRBC with the ZIP path and the target root path.
-4. Review the stdout report for:
+3. If the deployment contains known-good local changes, generate expectation
+   entries for those files with `create-expectations` and save them to one or
+   more expectation files.
+4. Run MiRBC with the ZIP path and the target root path, adding the
+   corresponding `-e` / `--expectations` files so those known-good deviations
+   do not appear as differences or extras.
+5. Review the stdout report for:
    - different files
    - missing files
    - extra files
    - the `Ignored Subdirectories` section
-   - summarized extras under `temp`, `modules`, `edocs`, and `hooks`
+   - summarized extras under `temp` and `edocs`
+   - optional summarized extras under `modules` and `hooks` when `--skip-modules` or `--skip-hooks` is used
    - warnings about ignored unexpected ZIP root-level entries
 
 ## Report Contents
@@ -164,6 +195,7 @@ The report prints:
 - parsed REDCap version when available
 - expectations files when provided
 - ignored subdirectories requested by the user
+- skip flags for `modules/` and `hooks/`
 - summary counts for matching, matched expectations, different, missing, and extra files
 - detailed path lists for matched expectations, different, missing, and extra files
 - warnings for ignored unexpected ZIP root-level entries
@@ -180,11 +212,12 @@ directories:
 
 Target-only extra content under those directories is summarized specially:
 
-- `temp` and `edocs`: summary count only
-- `modules`: summary count plus first-level extra subfolder names
-- `hooks`: summary count plus full tree of extra entries
+- `temp` and `edocs`: always summarized specially
+- `modules`: summarized specially only with `--skip-modules`
+- `hooks`: summarized specially only with `--skip-hooks`
 
-Those extras are excluded from the normal `Extra Files` section.
+When `--skip-modules` or `--skip-hooks` is not used, target-only content under
+those directories appears in the normal `Extra Files` section.
 
 ## Extra Versioned REDCap Folders
 

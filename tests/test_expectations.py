@@ -3,12 +3,17 @@ from __future__ import annotations
 import tempfile
 import unittest
 import zipfile
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from mirbc.cli import parse_inputs
 from mirbc.compare import compare_reference_zip_to_target, sha256_file
 from mirbc.expectations import load_expectations_files, parse_expectations_file
+from mirbc.generate import render_expectations
+from mirbc.__main__ import main
 from mirbc.report import render_report
+from mirbc.types import CompareInputs, CreateExpectationsInputs
 
 
 MARKER_CONTENT = {
@@ -142,6 +147,7 @@ class ExpectationsComparisonTests(unittest.TestCase):
 
             self.assertEqual(result.different_files, [])
             self.assertEqual(result.matched_expectations, ["database.php"])
+            self.assertEqual(result.total_expectations, 1)
             self.assertEqual(result.matching_count, len(MARKER_CONTENT))
             self.assertEqual(result.warnings, [])
 
@@ -164,6 +170,7 @@ class ExpectationsComparisonTests(unittest.TestCase):
                 reference_zip=reference_zip,
                 target_root=target_root,
                 expectations_files=[expectations_path],
+                skip_modules=True,
             )
 
             self.assertEqual(result.extra_files, [])
@@ -229,6 +236,7 @@ class ExpectationsComparisonTests(unittest.TestCase):
 
             self.assertEqual(result.missing_files, ["cron.php"])
             self.assertEqual(result.matched_expectations, [])
+            self.assertEqual(result.total_expectations, 1)
             self.assertIn(
                 "Unused expectation for missing target file: cron.php",
                 result.warnings,
@@ -261,18 +269,84 @@ class ExpectationsComparisonTests(unittest.TestCase):
                 reference_zip=reference_zip,
                 target_root=target_root,
                 expectations_files=[first, second],
+                skip_modules=True,
             )
 
             self.assertEqual(
                 result.matched_expectations,
                 ["database.php", "modules/custom/override.php"],
             )
+            self.assertEqual(result.total_expectations, 2)
             self.assertEqual(result.different_files, [])
             self.assertEqual(result.extra_files, [])
             self.assertEqual(result.special_dirs["modules"].extra_entry_count, 0)
 
+    def test_modules_and_hooks_are_normal_extras_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            reference_zip = build_reference_zip(root)
+            target_root = build_target_root(root)
+            module_extra = target_root / "modules" / "custom" / "override.php"
+            module_extra.parent.mkdir(parents=True, exist_ok=True)
+            module_extra.write_text("extra module\n", encoding="utf-8")
+            hook_extra = target_root / "hooks" / "before.php"
+            hook_extra.parent.mkdir(parents=True, exist_ok=True)
+            hook_extra.write_text("extra hook\n", encoding="utf-8")
+
+            result = compare_reference_zip_to_target(
+                reference_zip=reference_zip,
+                target_root=target_root,
+            )
+
+            self.assertIn("modules/custom/override.php", result.extra_files)
+            self.assertIn("hooks/before.php", result.extra_files)
+            self.assertEqual(set(result.special_dirs), {"temp", "edocs"})
+
+    def test_skip_flags_retain_special_modules_and_hooks_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            reference_zip = build_reference_zip(root)
+            target_root = build_target_root(root)
+            module_extra = target_root / "modules" / "custom" / "override.php"
+            module_extra.parent.mkdir(parents=True, exist_ok=True)
+            module_extra.write_text("extra module\n", encoding="utf-8")
+            hook_extra = target_root / "hooks" / "before.php"
+            hook_extra.parent.mkdir(parents=True, exist_ok=True)
+            hook_extra.write_text("extra hook\n", encoding="utf-8")
+
+            result = compare_reference_zip_to_target(
+                reference_zip=reference_zip,
+                target_root=target_root,
+                skip_modules=True,
+                skip_hooks=True,
+            )
+
+            self.assertNotIn("modules/custom/override.php", result.extra_files)
+            self.assertNotIn("hooks/before.php", result.extra_files)
+            self.assertEqual(result.special_dirs["modules"].extra_entry_count, 3)
+            self.assertEqual(result.special_dirs["hooks"].extra_entry_count, 2)
+
 
 class ExpectationsCliTests(unittest.TestCase):
+    def test_parse_inputs_dispatches_create_expectations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = build_target_root(Path(tmpdir))
+
+            inputs = parse_inputs(
+                [
+                    "create-expectations",
+                    "--base",
+                    str(root),
+                    "database.php",
+                ]
+            )
+
+            self.assertIsInstance(inputs, CreateExpectationsInputs)
+            assert isinstance(inputs, CreateExpectationsInputs)
+            self.assertEqual(inputs.root, root.resolve())
+            self.assertEqual(inputs.selected_paths, [(root / "database.php").resolve()])
+            self.assertFalse(inputs.recursive)
+
     def test_parse_inputs_accepts_multiple_expectations_files_and_dedupes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -297,7 +371,32 @@ class ExpectationsCliTests(unittest.TestCase):
             )
 
             assert inputs is not None
+            self.assertIsInstance(inputs, CompareInputs)
+            assert isinstance(inputs, CompareInputs)
             self.assertEqual(inputs.expectations_files, [first.resolve(), second.resolve()])
+            self.assertFalse(inputs.skip_modules)
+            self.assertFalse(inputs.skip_hooks)
+
+    def test_parse_inputs_accepts_skip_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            reference_zip = build_reference_zip(root)
+            target_root = build_target_root(root)
+
+            inputs = parse_inputs(
+                [
+                    "--skip-modules",
+                    "--skip-hooks",
+                    str(reference_zip),
+                    str(target_root),
+                ]
+            )
+
+            assert inputs is not None
+            self.assertIsInstance(inputs, CompareInputs)
+            assert isinstance(inputs, CompareInputs)
+            self.assertTrue(inputs.skip_modules)
+            self.assertTrue(inputs.skip_hooks)
 
     def test_parse_inputs_rejects_missing_expectations_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -312,6 +411,42 @@ class ExpectationsCliTests(unittest.TestCase):
                         str(root / "missing.txt"),
                         str(reference_zip),
                         str(target_root),
+                    ]
+                )
+
+    def test_create_expectations_requires_root(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires -b/--base"):
+            parse_inputs(["create-expectations", "database.php"])
+
+    def test_create_expectations_rejects_directory_without_recursive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = build_target_root(Path(tmpdir))
+            (root / "modules").mkdir()
+
+            with self.assertRaisesRegex(ValueError, "Directory input requires -r/--recursive"):
+                parse_inputs(
+                    [
+                        "create-expectations",
+                        "--base",
+                        str(root),
+                        "modules",
+                    ]
+                )
+
+    def test_create_expectations_rejects_paths_outside_base(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            root = build_target_root(tmp_path)
+            outside = tmp_path / "outside.txt"
+            outside.write_text("x\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "outside -b/--base"):
+                parse_inputs(
+                    [
+                        "create-expectations",
+                        "--base",
+                        str(root),
+                        str(outside),
                     ]
                 )
 
@@ -338,6 +473,132 @@ class ExpectationsReportTests(unittest.TestCase):
             self.assertIn("Expectations Files", report)
             self.assertIn(f"- {first.resolve()}", report)
             self.assertIn(f"- {second.resolve()}", report)
+
+    def test_render_report_shows_matched_expectations_as_ratio_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            reference_zip = build_reference_zip(root)
+            target_root = build_target_root(root)
+            changed_path = target_root / "database.php"
+            changed_path.write_text("changed target\n", encoding="utf-8")
+            expectations_path = root / "expectations.txt"
+            expectations_path.write_text(
+                "\n".join(
+                    [
+                        f"database.php = {sha256_file(changed_path)}",
+                        "missing.php = " + ("1" * 64),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = compare_reference_zip_to_target(
+                reference_zip=reference_zip,
+                target_root=target_root,
+                expectations_files=[expectations_path],
+            )
+
+            report = render_report(result)
+
+            self.assertIn("Matched expectations: 1 / 2", report)
+            self.assertNotIn("Matched Expectations\n", report)
+            self.assertNotIn("- database.php", report)
+
+    def test_render_report_shows_default_special_directories_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            reference_zip = build_reference_zip(root)
+            target_root = build_target_root(root)
+
+            result = compare_reference_zip_to_target(
+                reference_zip=reference_zip,
+                target_root=target_root,
+            )
+
+            report = render_report(result)
+
+            self.assertIn("temp/: contains", report)
+            self.assertIn("edocs/: contains", report)
+            self.assertNotIn("modules/: contains", report)
+            self.assertNotIn("hooks/: contains", report)
+
+
+class ExpectationsGenerationTests(unittest.TestCase):
+    def test_render_expectations_for_files_is_sorted_and_deduped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = build_target_root(Path(tmpdir))
+            extra = root / "alpha.php"
+            extra.write_text("alpha\n", encoding="utf-8")
+
+            rendered = render_expectations(
+                CreateExpectationsInputs(
+                    root=root.resolve(),
+                    selected_paths=[
+                        (root / "database.php").resolve(),
+                        extra.resolve(),
+                        (root / "database.php").resolve(),
+                    ],
+                    recursive=False,
+                )
+            )
+
+            self.assertEqual(
+                rendered,
+                (
+                    f"alpha.php = {sha256_file(extra)}\n"
+                    f"database.php = {sha256_file(root / 'database.php')}\n"
+                ),
+            )
+
+    def test_render_expectations_recurses_directories_and_skips_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = build_target_root(Path(tmpdir))
+            module_dir = root / "modules" / "custom"
+            module_dir.mkdir(parents=True, exist_ok=True)
+            module_file = module_dir / "a.php"
+            module_file.write_text("module\n", encoding="utf-8")
+            symlink_path = module_dir / "link.php"
+            symlink_path.symlink_to(module_file)
+
+            rendered = render_expectations(
+                CreateExpectationsInputs(
+                    root=root.resolve(),
+                    selected_paths=[(root / "modules").resolve()],
+                    recursive=True,
+                )
+            )
+
+            self.assertEqual(
+                rendered,
+                f"modules/custom/a.php = {sha256_file(module_file)}\n",
+            )
+
+    def test_main_create_expectations_writes_plain_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = build_target_root(Path(tmpdir))
+            expected_line = (
+                f"database.php = {sha256_file(root / 'database.php')}\n"
+            )
+            stdout = StringIO()
+
+            with patch("sys.argv", ["mirbc", "create-expectations", "--base", str(root), "database.php"]):
+                with patch("sys.stdout", stdout):
+                    exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stdout.getvalue(), expected_line)
+
+    def test_main_create_expectations_supports_short_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = build_target_root(Path(tmpdir))
+            stdout = StringIO()
+
+            with patch("sys.argv", ["mirbc", "create-expectations", "-b", str(root), "-r", "."]):
+                with patch("sys.stdout", stdout):
+                    exit_code = main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("database.php = ", stdout.getvalue())
 
 
 def build_reference_zip(root: Path) -> Path:

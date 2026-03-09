@@ -4,7 +4,9 @@ import sys
 
 from .cli import parse_inputs, print_error
 from .compare import compare_reference_zip_to_target
+from .generate import render_expectations
 from .report import render_report
+from .types import CompareInputs, CreateExpectationsInputs
 
 
 def main() -> int:
@@ -12,12 +14,20 @@ def main() -> int:
         inputs = parse_inputs(sys.argv[1:])
         if inputs is None:
             return 0
-        result = compare_reference_zip_to_target(
-            reference_zip=inputs.reference_zip,
-            target_root=inputs.target_root,
-            ignored_subdirectories=inputs.ignored_subdirectories,
-            expectations_files=inputs.expectations_files,
-        )
+        if isinstance(inputs, CompareInputs):
+            result = compare_reference_zip_to_target(
+                reference_zip=inputs.reference_zip,
+                target_root=inputs.target_root,
+                ignored_subdirectories=inputs.ignored_subdirectories,
+                expectations_files=inputs.expectations_files,
+                skip_modules=inputs.skip_modules,
+                skip_hooks=inputs.skip_hooks,
+            )
+        elif isinstance(inputs, CreateExpectationsInputs):
+            print(render_expectations(inputs), end="")
+            return 0
+        else:
+            raise ValueError("Unsupported input mode.")
     except (EOFError, KeyboardInterrupt):
         return print_error("Input cancelled.")
     except ValueError as exc:

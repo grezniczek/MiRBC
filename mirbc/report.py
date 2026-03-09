@@ -32,17 +32,25 @@ def render_report(result: ComparisonResult) -> str:
     add("----------------------")
     add_paths(add, result.ignored_subdirectories)
     add("")
+    add("Special Skip Flags")
+    add("------------------")
+    add(f"modules/: {'enabled' if result.skip_modules else 'disabled'}")
+    add(f"hooks/: {'enabled' if result.skip_hooks else 'disabled'}")
+    add("")
     add("Summary")
     add("-------")
     add(f"Matching files: {result.matching_count}")
-    add(f"Matched expectations: {len(result.matched_expectations)}")
+    add(
+        "Matched expectations: "
+        f"{len(result.matched_expectations)} / {result.total_expectations}"
+    )
     add(f"Different files: {len(result.different_files)}")
     add(f"Missing files: {len(result.missing_files)}")
     add(f"Extra files: {len(result.extra_files)}")
     add("")
     add("Special Directories")
     add("-------------------")
-    for name in ("temp", "edocs", "modules", "hooks"):
+    for name in result.special_dirs:
         report = result.special_dirs[name]
         add(f"{name}/: contains {report.extra_entry_count} extra files/folders")
         if name == "modules" and report.extra_module_dirs:
@@ -67,11 +75,6 @@ def render_report(result: ComparisonResult) -> str:
     add("Different Files")
     add("---------------")
     add_paths(add, result.different_files)
-    add("")
-
-    add("Matched Expectations")
-    add("--------------------")
-    add_paths(add, result.matched_expectations)
     add("")
 
     add("Missing Files")
