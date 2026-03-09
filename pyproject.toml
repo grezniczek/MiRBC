@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mirbc"
+version = "0.1.0"
+description = "Minimal REDCap Baseline Comparator"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "OpenAI Codex"},
+]
+
+[project.scripts]
+mirbc = "mirbc.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["mirbc*"]
